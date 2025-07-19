@@ -1,0 +1,447 @@
+import os
+from chromadb import PersistentClient
+from chromadb import Documents, EmbeddingFunction, Embeddings
+import google.generativeai as genai  
+import json
+from datetime import datetime, date
+import dotenv
+dotenv.load_dotenv()
+# ✅ 설정
+
+CHROMA_DIR = "rag/chroma_db"
+COLLECTION_NAME = "knou_chunks"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# API 키 전역 설정
+genai.configure(api_key=GEMINI_API_KEY)
+
+# ✅ Gemini 임베딩 함수 (최신 API 방식)
+class GeminiEmbeddingFunction(EmbeddingFunction):
+    def __init__(self):
+        self.model = "models/text-embedding-004"
+    
+    def __call__(self, input: Documents) -> Embeddings:
+        try:
+            # 배치 임베딩 요청
+            result = genai.embed_content(
+                model=self.model,
+                content=input,
+                task_type="retrieval_document"
+            )
+            return result['embedding']
+        except Exception as e:
+            print(f"❌ 임베딩 생성 오류: {e}")
+            return [[0.0] * 768 for _ in input]
+
+class KNOUChatbot:
+    def __init__(self):
+        print("🤖 KNOU 챗봇을 초기화하는 중...")
+        
+        # ChromaDB 클라이언트 초기화
+        self.chroma_client = PersistentClient(path=CHROMA_DIR)
+        self.embedding_func = GeminiEmbeddingFunction()
+        
+        # 컬렉션 로드
+        try:
+            self.collection = self.chroma_client.get_collection(
+                name=COLLECTION_NAME,
+                embedding_function=self.embedding_func
+            )
+            print(f"✅ 컬렉션 로드 완료: {self.collection.count()}개 청크")
+        except Exception as e:
+            print(f"❌ 컬렉션 로드 실패: {e}")
+            return
+        
+        # Gemini 생성 모델 (최신 방식)
+        self.gen_model = genai.GenerativeModel("gemini-1.5-flash")
+        
+        print("🎯 KNOU 챗봇 준비 완료!\n")
+
+    def get_data_date_info(self):
+        """시스템 데이터의 날짜 범위 정보 가져오기"""
+        try:
+            all_data = self.collection.get(include=['metadatas'])
+            dates = set()
+            
+            for meta in all_data['metadatas']:
+                if meta and meta.get('date'):
+                    dates.add(meta['date'])
+            
+            if dates:
+                sorted_dates = sorted(dates)
+                return {
+                    'latest': sorted_dates[-1],
+                    'oldest': sorted_dates[0],
+                    'total_dates': len(sorted_dates)
+                }
+            return None
+        except Exception as e:
+            print(f"⚠️ 날짜 정보 가져오기 실패: {e}")
+            return None
+
+    def expand_query(self, query: str) -> list[str]:
+        """LLM을 사용해 검색을 위한 다양한 질문 생성 (오늘 날짜 자동 포함)"""
+        
+        today = date.today().strftime("%Y-%m-%d")
+        
+        prompt = f"""당신은 벡터 검색에 최적화된 질문을 생성하는 전문가입니다. 사용자의 질문을 받아서, 그 의미를 다양한 각도에서 포착할 수 있는 3개의 구체적인 질문으로 재작성해주세요.
+
+**중요: 오늘은 {today}입니다. 이 날짜를 기준으로 최신 정보와 관련성이 높은 질문으로 재작성해주세요.**
+
+결과는 다른 설명 없이 번호 목록으로만 제공해주세요.
+
+원본 질문: "{query}"
+
+재작성된 질문:
+"""
+        try:
+            response = self.gen_model.generate_content(prompt)
+            
+            expanded_queries = [line.strip().split('. ', 1)[1] for line in response.text.strip().split('\n') if '. ' in line]
+            
+            enhanced_query = f"[오늘: {today}] {query}"
+            all_queries = [enhanced_query] + expanded_queries
+            print(f"💡 쿼리 확장 (오늘: {today}): {all_queries[0]}")
+            return all_queries
+
+        except Exception as e:
+            print(f"⚠️ 쿼리 확장 실패 ({e}), 원본 질문만 사용합니다.")
+            enhanced_query = f"[오늘: {today}] {query}"
+            return [enhanced_query]
+    
+    def calculate_date_weight(self, doc_date: str, current_date: str = None) -> float:
+        """날짜 기반 가중치 계산 - 최신 문서일수록 높은 가중치"""
+        if not current_date:
+            current_date = date.today().strftime("%Y-%m-%d")
+        
+        try:
+            # 다양한 날짜 형식 처리
+            doc_dt = None
+            curr_dt = datetime.strptime(current_date, "%Y-%m-%d")
+            current_year = datetime.now().year
+            
+            # 날짜 범위나 특수 형식 처리 (예: "07.25 ~ 07.25")
+            if "~" in doc_date:
+                # 범위의 첫 번째 날짜만 사용
+                first_date = doc_date.split("~")[0].strip()
+                return self.calculate_date_weight(first_date, current_date)
+            
+            # 여러 날짜 형식 시도
+            date_formats = [
+                "%Y-%m-%d",      # 2025-07-16
+                "%Y.%m.%d",      # 2025.07.16  
+                "%Y/%m/%d",      # 2025/07/16
+            ]
+            
+            # 기본 형식들 시도
+            for fmt in date_formats:
+                try:
+                    doc_dt = datetime.strptime(doc_date, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            # 월.일 형식 처리 (현재 연도 추가)
+            if not doc_dt:
+                try:
+                    # "07.25" 형식
+                    if len(doc_date.split('.')) == 2:
+                        month, day = doc_date.split('.')
+                        if len(month) <= 2 and len(day) <= 2:
+                            full_date = f"{current_year}.{month.zfill(2)}.{day.zfill(2)}"
+                            doc_dt = datetime.strptime(full_date, "%Y.%m.%d")
+                    # "07/25" 형식
+                    elif len(doc_date.split('/')) == 2:
+                        month, day = doc_date.split('/')
+                        if len(month) <= 2 and len(day) <= 2:
+                            full_date = f"{current_year}/{month.zfill(2)}/{day.zfill(2)}"
+                            doc_dt = datetime.strptime(full_date, "%Y/%m/%d")
+                except ValueError:
+                    pass
+            
+            if not doc_dt:
+                print(f"⚠️ 지원되지 않는 날짜 형식: {doc_date}")
+                return 0.3  # 기본 가중치
+            
+            # 날짜 차이 계산 (일 단위)
+            days_diff = abs((curr_dt - doc_dt).days)
+            
+            # 가중치 계산: 최근 30일은 1.0, 그 이후로는 지수적 감소
+            if days_diff <= 30:
+                return 1.0
+            elif days_diff <= 90:
+                return 0.8
+            elif days_diff <= 180:
+                return 0.6
+            elif days_diff <= 365:
+                return 0.4
+            else:
+                return 0.2
+                
+        except Exception as e:
+            print(f"⚠️ 날짜 처리 오류 ({doc_date}): {e}")
+            return 0.3  # 기본 가중치
+
+    def search_documents(self, query: str, n_results: int = 5):
+        """하이브리드 검색: LLM쿼리확장(Vector)과 키워드(Full-text) 검색을 RRF로 결합 + 날짜 기반 정렬"""
+        
+        # --- 1단계: 의미 기반 벡터 검색 (Query Expansion 사용) ---
+        print("1️⃣  의미 기반 검색 실행...")
+        expanded_queries = self.expand_query(query)
+        vector_search_results = {}  # {doc_id: rank}
+
+        for i, exp_query in enumerate(expanded_queries):
+            try:
+                results = self.collection.query(query_texts=[exp_query], n_results=n_results)
+                print(f"   벡터 검색 {i+1}: {len(results['ids'][0])}개 결과")
+                for rank, doc_id in enumerate(results['ids'][0]):
+                    if doc_id not in vector_search_results:
+                        vector_search_results[doc_id] = rank + 1 # 랭크는 1부터 시작
+            except Exception as e:
+                print(f"❌ '{exp_query}' 벡터 검색 중 오류: {e}")
+        
+        print(f"   벡터 검색 총 {len(vector_search_results)}개 고유 문서")
+        
+        # --- 2단계: 키워드 기반 텍스트 검색 (BM25 알고리즘 모사) ---
+        print("2️⃣  키워드 기반 검색 실행...")
+        keyword_search_results = {} # {doc_id: rank}
+        try:
+            # 'ids'는 include에 명시하지 않아도 기본 반환됨
+            all_docs = self.collection.get(include=["documents", "metadatas"]) 
+            
+            # 쿼리에서 중요 키워드 추출 (더 정확한 매칭을 위해)
+            import re
+            query_lower = query.lower()
+            
+            # 핵심 키워드 추출 및 확장
+            key_terms = set()
+            
+            # 기본 쿼리 키워드
+            basic_keywords = query_lower.split()
+            key_terms.update(basic_keywords)
+            
+            # 장학금 관련 키워드 확장
+            if any(word in query_lower for word in ['장학', '성적우수', '성적', '우수']):
+                key_terms.update(['장학금', '장학생', '성적우수장학', '성적우수', '장학'])
+            
+            # 학사 관련 키워드 확장  
+            if any(word in query_lower for word in ['등록', '학비', '수강']):
+                key_terms.update(['등록금', '학비', '수강신청'])
+            
+            print(f"🔑 확장된 키워드: {list(key_terms)[:5]}...")
+            
+            scores = []
+            for doc_id, document, metadata in zip(all_docs['ids'], all_docs['documents'], all_docs['metadatas']):
+                doc_lower = document.lower()
+                title_lower = metadata.get('title', '').lower() if metadata else ''
+                
+                # 문서 내용과 제목에서 키워드 매칭
+                content_matches = sum(1 for term in key_terms if term in doc_lower)
+                title_matches = sum(1 for term in key_terms if term in title_lower) * 2  # 제목 매칭에 가중치
+                
+                total_score = content_matches + title_matches
+                
+                if total_score > 0:
+                    scores.append({'id': doc_id, 'score': total_score})
+            
+            # 점수 순으로 정렬하여 랭크 부여
+            sorted_by_score = sorted(scores, key=lambda x: x['score'], reverse=True)
+            for rank, item in enumerate(sorted_by_score):
+                keyword_search_results[item['id']] = rank + 1
+            
+            print(f"   키워드 검색 총 {len(keyword_search_results)}개 문서 (상위 점수: {sorted_by_score[0]['score'] if sorted_by_score else 0})")
+
+        except Exception as e:
+            print(f"❌ 키워드 검색 중 오류: {e}")
+
+        # --- 3단계: RRF (Reciprocal Rank Fusion) 로 결과 재정렬 ---
+        print("3️⃣  RRF로 결과 재정렬...")
+        fused_scores = {}
+        k = 60  # RRF의 기본 상수
+        vector_weight = 1.0
+        keyword_weight = 1.5 # 키워드 검색에 더 높은 가중치
+
+        # 벡터 검색 결과 점수 합산
+        for doc_id, rank in vector_search_results.items():
+            fused_scores[doc_id] = fused_scores.get(doc_id, 0) + (1 / (k + rank)) * vector_weight
+
+        # 키워드 검색 결과 점수 합산
+        for doc_id, rank in keyword_search_results.items():
+            fused_scores[doc_id] = fused_scores.get(doc_id, 0) + (1 / (k + rank)) * keyword_weight
+            
+        # 최종 점수 기준으로 정렬
+        sorted_fused_ids = sorted(fused_scores.keys(), key=lambda x: fused_scores[x], reverse=True)
+        
+        print(f"   RRF 융합 결과: {len(sorted_fused_ids)}개 문서")
+        
+        if not sorted_fused_ids:
+            return None # 결과가 없으면 None 반환
+
+        # 최종 상위 n_results개의 문서 정보 가져오기
+        top_ids = sorted_fused_ids[:n_results]
+        final_results = self.collection.get(ids=top_ids, include=["documents", "metadatas"])
+        
+        # --- 4단계: 날짜 기반 2차 정렬 (최신순) ---
+        print("4️⃣  날짜 기반 정렬 및 가중치 적용...")
+        try:
+            # 오늘 날짜 자동 가져오기
+            current_date = date.today().strftime("%Y-%m-%d")
+            
+            # id와 메타데이터를 매핑
+            id_to_data = {}
+            for doc_id, doc, meta in zip(final_results['ids'], final_results['documents'], final_results['metadatas']):
+                date_str = meta.get('date', '1900-01-01') if meta else '1900-01-01'
+                date_weight = self.calculate_date_weight(date_str, current_date)
+                
+                # RRF 점수에 날짜 가중치 적용
+                weighted_score = fused_scores[doc_id] * date_weight
+                
+                id_to_data[doc_id] = {
+                    'document': doc,
+                    'metadata': meta,
+                    'date': date_str,
+                    'rrf_score': fused_scores[doc_id],
+                    'date_weight': date_weight,
+                    'final_score': weighted_score
+                }
+            
+            # 최종 가중 점수로 정렬 (높은 점수 순)
+            sorted_by_weighted_score = sorted(
+                top_ids,
+                key=lambda x: id_to_data[x]['final_score'],
+                reverse=True
+            )
+            
+            # 정렬된 순서로 결과 재구성
+            final_docs = [id_to_data[doc_id]['document'] for doc_id in sorted_by_weighted_score]
+            final_metas = [id_to_data[doc_id]['metadata'] for doc_id in sorted_by_weighted_score]
+            
+            # 점수 정보 출력 (디버깅용) - 모바일 최적화: 간략하게
+            print(f"📊 기준일: {current_date}, 상위 문서 점수:")
+            for i, doc_id in enumerate(sorted_by_weighted_score[:2]):  # 상위 2개만
+                data = id_to_data[doc_id]
+                print(f"   {i+1}. 최종: {data['final_score']:.4f} [{data['date']}]")
+            
+            return {
+                'ids': [sorted_by_weighted_score],
+                'documents': [final_docs],
+                'metadatas': [final_metas]
+            }
+            
+        except Exception as e:
+            print(f"⚠️ 날짜 정렬 중 오류 ({e}), RRF 순서 유지")
+            # 오류 시 기존 RRF 순서 유지
+            id_to_doc = {doc_id: (doc, meta) for doc_id, doc, meta in zip(final_results['ids'], final_results['documents'], final_results['metadatas'])}
+            final_docs = [id_to_doc[doc_id][0] for doc_id in top_ids if doc_id in id_to_doc]
+            final_metas = [id_to_doc[doc_id][1] for doc_id in top_ids if doc_id in id_to_doc]
+            
+            return {
+                'ids': [top_ids],
+                'documents': [final_docs],
+                'metadatas': [final_metas]
+            }
+    
+    def generate_answer(self, query: str, context_docs: list, context_metas: list = None):
+        """검색된 문서를 바탕으로 답변 생성 (스트리밍 및 안전 설정 완화)"""
+        
+        context_parts = []
+        for i, doc in enumerate(context_docs):
+            if context_metas and i < len(context_metas) and context_metas[i]:
+                date_val = context_metas[i].get('date', '날짜 미상')
+                title = context_metas[i].get('title', '제목 없음')
+                context_parts.append(f"문서 제목: {title}\n문서 날짜: {date_val}\n문서 내용:\n{doc}")
+            else:
+                context_parts.append(doc)
+        
+        context = "\n\n---\n\n".join(context_parts)
+        
+        prompt = f"""당신은 한국방송통신대학교(KNOU)의 정보를 가장 가독성 좋게 요약하는 AI 전문가입니다. **반드시 마크다운(Markdown)을 사용**하여, 핵심을 먼저 보여주고 세부 정보를 명확하게 구분하여 사용자가 쉽게 이해하도록 답변을 구성해주세요.
+
+**답변 생성 규칙 (Markdown 사용):**
+
+1.  **🎯 핵심 요약 (맨 처음에):**
+    *   사용자 질문에 대한 가장 중요한 답변을 **굵은 글씨**와 함께 1~2문장으로 요약하여 가장 먼저 보여주세요.
+    *   관련 공지 날짜를 반드시 언급해주세요. (예: "**2025년 7월 16일 공지에 따르면, 2학기 성적우수장학생 선발이 확정되었습니다.**")
+
+2.  **🔖 주요 정보 (섹션으로 구분):**
+    *   `###` (h3)와 이모지를 사용하여 주요 정보 섹션을 나누세요. (예: `### 📌 선발 확인 방법`)
+    *   내용은 `*`를 사용한 목록(list)으로 간결하게 설명하세요.
+    *   표(Table)는 마크다운 표 문법을 사용하여 간결하게 만드세요.
+
+3.  **⭐ 강조:**
+    *   가장 중요한 정보는 `**굵게**` 표시하여 강조하세요.
+
+4.  **친절한 말투:**
+    *   전체적으로 친근하고 명확한 말투를 사용하세요.
+
+5.  **정보의 정확성:**
+    *   제공된 **참고 문서** 내용만을 바탕으로 답변해야 합니다. 없는 내용은 "정보를 찾을 수 없습니다"라고 명확히 말해주세요.
+
+---
+
+**사용자 질문:** {query}
+
+**참고 문서:**
+{context}
+
+**답변 (Markdown 형식):**
+"""
+
+        try:
+            # 안전 설정 완화 및 스트리밍 활성화
+            response = self.gen_model.generate_content(
+                prompt,
+                stream=True,
+                safety_settings={
+                    'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
+                    'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
+                    'HARM_CATEGORY_SEXUALLY_EXPLICIT': 'BLOCK_NONE',
+                    'HARM_CATEGORY_DANGEROUS_CONTENT': 'BLOCK_NONE',
+                }
+            )
+            for chunk in response:
+                yield chunk.text
+        except Exception as e:
+            print(f"❌ 답변 생성 중 오류: {e}")
+            yield "죄송합니다, 답변을 생성하는 동안 오류가 발생했습니다."
+
+    def chat(self, query: str):
+        """전체 RAG 프로세스 실행 (스트리밍 답변 생성)"""
+        print(f"🔍 검색 중: '{query}'")
+        
+        # 1. 관련 문서 검색
+        search_results = self.search_documents(query)
+        if not search_results or not search_results['documents'][0]:
+            yield "죄송합니다. 관련된 정보를 찾을 수 없습니다."
+            return
+
+        # 2. 검색 결과 출력
+        documents = search_results['documents'][0]
+        metadatas = search_results.get('metadatas', [None])[0] if search_results.get('metadatas') else None
+        print(f"📚 {len(documents)}개의 관련 문서를 찾았습니다.")
+        
+        # 3. 답변 생성 (스트리밍)
+        print("💭 스트리밍 답변 생성 중...")
+        yield from self.generate_answer(query, documents, metadatas)
+        print("\n✅ 스트리밍 완료.")
+
+def main():
+    """메인 함수"""
+    try:
+        chatbot = KNOUChatbot()
+        # chatbot.interactive_chat() # 이제 스트리밍 사용
+        # 스트리밍 사용 시 예시:
+        # for answer_chunk in chatbot.chat("오늘 학교 출석 체크 방법은?"):
+        #     print(answer_chunk, end='', flush=True)
+        # print() # 마지막 줄 출력
+
+        # 대화형 인터페이스 유지 - 이 줄을 주석 처리하세요!
+        # chatbot.interactive_chat()
+        
+        print("✅ 챗봇이 준비되었습니다. FastAPI 서버를 통해 사용하세요.")
+
+    except Exception as e:
+        print(f"❌ 챗봇 초기화 실패: {e}")
+
+if __name__ == "__main__":
+    main() 

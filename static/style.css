@@ -1,0 +1,347 @@
+:root {
+  --bg-color: #1c1c1e; /* 더 어두운 배경 */
+  --primary-color: #2c2c2e; /* 콘텐츠 배경 */
+  --text-color: #f2f2f7; /* 밝은 텍스트 */
+  --accent-color: #0a84ff; /* Apple 스타일 블루 */
+  --border-color: #38383a; /* 부드러운 경계선 */
+  --font-sans: "Noto Sans KR", sans-serif;
+  --font-mono: "Roboto Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.chat-container {
+  width: 100%;
+  max-width: 800px;
+  height: 90vh;
+  background-color: var(--primary-color);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); /* 그림자 완화 */
+  border: 1px solid var(--border-color); /* 테두리 색상 변경 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+header {
+  padding: 20px;
+  text-align: center;
+  border-bottom: 1px solid var(--border-color);
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+header h1 {
+  font-family: var(--font-mono);
+  color: var(--text-color); /* 기본 텍스트 색상으로 변경 */
+  font-size: 24px;
+  letter-spacing: 1px;
+  text-shadow: none; /* 텍스트 그림자 제거 */
+}
+
+header p {
+  font-size: 14px;
+  color: #8e8e93; /* 보조 텍스트 색상 */
+}
+
+.chat-box {
+  flex-grow: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+/* 스크롤바 디자인 */
+.chat-box::-webkit-scrollbar {
+  width: 6px;
+}
+.chat-box::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-box::-webkit-scrollbar-thumb {
+  background-color: var(--accent-color);
+  border-radius: 6px;
+}
+
+/* 메시지 스타일 */
+.message {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  max-width: 85%;
+  animation: slideIn 0.3s ease-out;
+}
+
+.message.user-message {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.message.bot-message {
+  align-self: flex-start;
+}
+
+/* 아바타 스타일 */
+.user-avatar,
+.bot-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.user-avatar {
+  background: var(--accent-color);
+  color: white;
+}
+
+.bot-avatar {
+  background: #1a1a1a;
+  border: 2px solid #333;
+}
+
+/* KNOU 로고 스타일 */
+.knou-logo {
+  color: white;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.message-content {
+  background: #2a2a2c;
+  border-radius: 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  flex: 1;
+  min-width: 0;
+}
+
+.user-message {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+
+.user-message .message-content {
+  background: var(--accent-color);
+  color: white;
+  border-color: var(--accent-color);
+}
+
+.bot-message {
+  align-self: flex-start;
+}
+
+.bot-message .message-content {
+  background: #2a2a2c;
+  color: var(--text-color);
+  border-color: var(--border-color);
+}
+
+.bot-message.thinking .message-content::after {
+  content: "...";
+  display: inline-block;
+  animation: typing 1s infinite;
+}
+
+@keyframes typing {
+  0% {
+    content: ".";
+  }
+  33% {
+    content: "..";
+  }
+  66% {
+    content: "...";
+  }
+}
+
+/* 애니메이션 */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.input-area {
+  padding: 15px;
+  border-top: 1px solid var(--border-color);
+}
+
+.chat-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  width: 100%;
+}
+
+#user-input {
+  flex: 1;
+  height: 44px;
+  min-height: 44px;
+  max-height: 120px;
+  padding: 10px 16px;
+  border: 2px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--input-bg);
+  color: var(--text-color);
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  transition: all 0.2s ease;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+#user-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.1);
+}
+
+#send-button {
+  min-width: 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: white;
+  color: #333;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+}
+
+#send-button:hover {
+  background: #f0f0f0;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+#send-button:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#send-button svg {
+  width: 20px;
+  height: 20px;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-content h3 {
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+  font-size: 1.1em;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 0.3em;
+}
+
+.message-content ul {
+  padding-left: 20px;
+  margin-top: 0.5em;
+  margin-bottom: 1em;
+}
+
+.message-content li {
+  margin-bottom: 0.4em;
+  line-height: 1.6;
+}
+
+.message-content p {
+  margin: 0 0 0.5em;
+  line-height: 1.6;
+}
+
+.message-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1em;
+  font-size: 0.9em;
+}
+
+.message-content th,
+.message-content td {
+  border: 1px solid var(--border-color);
+  padding: 8px 12px;
+  text-align: left;
+}
+
+.message-content th {
+  background-color: #3a3a3c;
+  font-weight: 600;
+}
+
+.message-content strong {
+  color: var(--accent-color-light);
+}
+
+/* 타이핑 커서 스타일 */
+.typing-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 1.2em;
+  background-color: var(--accent-color);
+  border-radius: 2px;
+  animation: blink 1s infinite;
+}
+
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 오류 메시지 스타일 */
+.error {
+  color: #ff5e5e;
+  font-weight: 500;
+}
