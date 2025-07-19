@@ -66,8 +66,10 @@ def process_row(row, file_type):
         {
             "id": generate_unique_id(file_type, row, chunk, i),
             "text": chunk,
-            "metadata": metadata,
-            "source": source or file_type  # 기존 호환성 유지
+            "date": metadata["date"],
+            "title": metadata["title"], 
+            "type": metadata["type"],
+            "source": metadata["source"]
         }
         for i, chunk in enumerate(chunks)
     ]
