@@ -19,4 +19,4 @@ beautifulsoup4==4.12.2
 python-dotenv==1.0.0
 
 # 기타 유틸리티
-python-multipart==0.0.6 
+python-multipart==0.0.6

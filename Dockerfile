@@ -1,4 +1,3 @@
-
 FROM python:3.9-slim
 
 WORKDIR /app
@@ -11,13 +10,13 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Playwright 설치 (Linux 최적화)
-RUN pip install playwright
-RUN playwright install chromium --with-deps
-
-# 필요한 Python 패키지 설치
+# 필요한 Python 패키지 먼저 설치
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+
+# Playwright 브라우저 설치 (requirements.txt 설치 후)
+RUN playwright install chromium
+RUN playwright install-deps chromium
 
 # 앱 코드 복사
 COPY . .
@@ -44,4 +43,4 @@ VOLUME ["/app/rag/chroma_db", "/app/data", "/app/logs"]
 EXPOSE 8001
 
 # supervisor로 여러 프로세스 관리
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"] 
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
