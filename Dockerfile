@@ -1,11 +1,4 @@
 
-### supervisor 설정 파일
-
-```ini:supervisord.conf
-[supervisord]
-nodaemon
-```
-
 FROM python:3.9-slim
 
 WORKDIR /app
