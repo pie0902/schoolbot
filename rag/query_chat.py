@@ -79,6 +79,97 @@ class KNOUChatbot:
             print(f"⚠️ 날짜 정보 가져오기 실패: {e}")
             return None
 
+    def preprocess_query(self, query: str) -> str:
+        """🚀 빠른 개선: 쿼리 전처리 - 일반 용어를 공식 용어로 변환"""
+        
+        # 용어 정규화 매핑
+        term_mappings = {
+            '학비': '등록금',
+            '등록비': '등록금', 
+            '학습비': '등록금',
+            '납부': '등록금 납부',
+            '장학': '장학금',
+            '성적우수': '성적우수장학',
+            '우수장학': '성적우수장학',
+            '수강': '수강신청',
+            '과목신청': '수강신청',
+            '시험': '출석시험',
+            '졸업': '졸업논문',
+            '2학기': '2025학년도 2학기',
+            '1학기': '2025학년도 1학기'
+        }
+        
+        enhanced_query = query
+        for original, replacement in term_mappings.items():
+            if original in query and replacement not in query:
+                enhanced_query = enhanced_query.replace(original, f"{original} {replacement}")
+        
+        return enhanced_query
+    
+    def get_enhanced_keywords(self, query: str) -> set:
+        """🚀 빠른 개선: 대폭 확장된 키워드 매핑"""
+        
+        query_lower = query.lower()
+        enhanced_keywords = set(query_lower.split())
+        
+        # 등록금 관련 키워드 확장
+        if any(word in query_lower for word in ['등록', '학비', '납부', '등록금']):
+            enhanced_keywords.update([
+                '등록금', '학비', '납부', '수납', '등록비', '학습비', 
+                '등록금납부', '등록금안내', '등록금수납', '등록'
+            ])
+        
+        # 장학금 관련 키워드 확장  
+        if any(word in query_lower for word in ['장학', '성적우수', '성적', '우수']):
+            enhanced_keywords.update([
+                '장학금', '장학생', '성적우수장학', '성적우수', '장학',
+                '우수장학', '장학혜택', '장학선발', '장학안내'
+            ])
+        
+        # 수강 관련 키워드 확장
+        if any(word in query_lower for word in ['수강', '과목', '신청']):
+            enhanced_keywords.update([
+                '수강신청', '과목신청', '수강', '과목', '신청',
+                '수강안내', '신청안내', '수강방법'
+            ])
+        
+        # 시험 관련 키워드 확장
+        if any(word in query_lower for word in ['시험', '평가', '출석']):
+            enhanced_keywords.update([
+                '시험', '출석시험', '평가', '시험안내', '시험일정',
+                '기말시험', '중간시험', '시험방법'
+            ])
+        
+        # 시간 관련 키워드 확장
+        if any(word in query_lower for word in ['2025', '2학기', '1학기']):
+            enhanced_keywords.update([
+                '2025학년도', '2025년', '2학기', '1학기',
+                '2025학년도 2학기', '2025학년도 1학기'
+            ])
+        
+        return enhanced_keywords
+    
+    def get_exact_phrases(self, query: str) -> list:
+        """🚀 빠른 개선: 정확한 구문 매칭을 위한 핵심 구문 추출"""
+        
+        exact_phrases = []
+        query_lower = query.lower()
+        
+        # 핵심 구문 패턴들
+        key_phrases = [
+            '등록금 납부', '등록금 안내', '등록금납부안내',
+            '장학금 선발', '성적우수장학', '장학생 선발',
+            '수강신청', '과목신청', '수강 안내',
+            '시험 안내', '출석시험', '시험일정',
+            '2025학년도 2학기', '2학기', '2025년 2학기'
+        ]
+        
+        for phrase in key_phrases:
+            if phrase in query_lower:
+                exact_phrases.append(phrase)
+        
+        return exact_phrases
+
     def expand_query(self, query: str) -> list[str]:
         """LLM을 사용해 검색을 위한 다양한 질문 생성 (오늘 날짜 자동 포함)"""
         
@@ -166,17 +257,19 @@ class KNOUChatbot:
             # 날짜 차이 계산 (일 단위)
             days_diff = abs((curr_dt - doc_dt).days)
             
-            # 가중치 계산: 최근 30일은 1.0, 그 이후로는 지수적 감소
-            if days_diff <= 30:
-                return 1.0
+            # 🚀 빠른 개선: 더 강력한 최신성 가중치
+            if days_diff <= 7:
+                return 1.5  # 최근 일주일은 더 높은 가중치
+            elif days_diff <= 30:
+                return 1.2  # 최근 한 달
             elif days_diff <= 90:
-                return 0.8
+                return 1.0  # 최근 3개월
             elif days_diff <= 180:
-                return 0.6
+                return 0.7  # 최근 6개월
             elif days_diff <= 365:
-                return 0.4
+                return 0.5  # 최근 1년
             else:
-                return 0.2
+                return 0.3  # 1년 이상
                 
         except Exception as e:
             print(f"⚠️ 날짜 처리 오류 ({doc_date}): {e}")
@@ -185,9 +278,12 @@ class KNOUChatbot:
     def search_documents(self, query: str, n_results: int = 5):
         """하이브리드 검색: LLM쿼리확장(Vector)과 키워드(Full-text) 검색을 RRF로 결합 + 날짜 기반 정렬"""
         
+        # 🚀 빠른 개선: 쿼리 전처리 및 키워드 확장
+        enhanced_query = self.preprocess_query(query)
+        
         # --- 1단계: 의미 기반 벡터 검색 (Query Expansion 사용) ---
         print("1️⃣  의미 기반 검색 실행...")
-        expanded_queries = self.expand_query(query)
+        expanded_queries = self.expand_query(enhanced_query)
         vector_search_results = {}  # {doc_id: rank}
 
         for i, exp_query in enumerate(expanded_queries):
@@ -202,44 +298,32 @@ class KNOUChatbot:
         
         print(f"   벡터 검색 총 {len(vector_search_results)}개 고유 문서")
         
-        # --- 2단계: 키워드 기반 텍스트 검색 (BM25 알고리즘 모사) ---
-        print("2️⃣  키워드 기반 검색 실행...")
+        # --- 2단계: 강화된 키워드 기반 텍스트 검색 ---
+        print("2️⃣  강화된 키워드 기반 검색 실행...")
         keyword_search_results = {} # {doc_id: rank}
         try:
-            # 'ids'는 include에 명시하지 않아도 기본 반환됨
             all_docs = self.collection.get(include=["documents", "metadatas"]) 
             
-            # 쿼리에서 중요 키워드 추출 (더 정확한 매칭을 위해)
-            import re
-            query_lower = query.lower()
+            # 🚀 빠른 개선: 대폭 확장된 키워드 매핑
+            enhanced_keywords = self.get_enhanced_keywords(enhanced_query)
             
-            # 핵심 키워드 추출 및 확장
-            key_terms = set()
-            
-            # 기본 쿼리 키워드
-            basic_keywords = query_lower.split()
-            key_terms.update(basic_keywords)
-            
-            # 장학금 관련 키워드 확장
-            if any(word in query_lower for word in ['장학', '성적우수', '성적', '우수']):
-                key_terms.update(['장학금', '장학생', '성적우수장학', '성적우수', '장학'])
-            
-            # 학사 관련 키워드 확장  
-            if any(word in query_lower for word in ['등록', '학비', '수강']):
-                key_terms.update(['등록금', '학비', '수강신청'])
-            
-            print(f"🔑 확장된 키워드: {list(key_terms)[:5]}...")
+            print(f"🔑 확장된 키워드: {list(enhanced_keywords)[:8]}...")
             
             scores = []
             for doc_id, document, metadata in zip(all_docs['ids'], all_docs['documents'], all_docs['metadatas']):
                 doc_lower = document.lower()
                 title_lower = metadata.get('title', '').lower() if metadata else ''
                 
-                # 문서 내용과 제목에서 키워드 매칭
-                content_matches = sum(1 for term in key_terms if term in doc_lower)
-                title_matches = sum(1 for term in key_terms if term in title_lower) * 2  # 제목 매칭에 가중치
+                # 🚀 빠른 개선: 제목 가중치 대폭 증가 (2배 → 5배)
+                content_matches = sum(1 for term in enhanced_keywords if term in doc_lower)
+                title_matches = sum(1 for term in enhanced_keywords if term in title_lower) * 5  # 제목 매칭 가중치 증가
                 
-                total_score = content_matches + title_matches
+                # 🚀 빠른 개선: 정확한 구문 매칭 보너스
+                exact_phrase_bonus = 0
+                if any(phrase in title_lower for phrase in self.get_exact_phrases(enhanced_query)):
+                    exact_phrase_bonus = 10  # 정확한 구문 매칭 시 높은 보너스
+                
+                total_score = content_matches + title_matches + exact_phrase_bonus
                 
                 if total_score > 0:
                     scores.append({'id': doc_id, 'score': total_score})
@@ -259,7 +343,7 @@ class KNOUChatbot:
         fused_scores = {}
         k = 60  # RRF의 기본 상수
         vector_weight = 1.0
-        keyword_weight = 1.5 # 키워드 검색에 더 높은 가중치
+        keyword_weight = 2.0 # 🚀 빠른 개선: 키워드 검색 가중치 증가 (1.5 → 2.0)
 
         # 벡터 검색 결과 점수 합산
         for doc_id, rank in vector_search_results.items():
