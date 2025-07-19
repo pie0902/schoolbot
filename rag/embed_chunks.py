@@ -91,8 +91,8 @@ def main():
         batch = new_chunks[i:i+batch_size]
         
         # 메타데이터와 문서 분리
-        documents = [chunk["content"] for chunk in batch]
-        metadatas = [{k: v for k, v in chunk.items() if k not in ["content", "id"]} for chunk in batch]
+        documents = [chunk["text"] for chunk in batch]
+        metadatas = [{k: v for k, v in chunk.items() if k not in ["text", "id"]} for chunk in batch]
         ids = [chunk["id"] for chunk in batch]
         
         print(f"🔄 배치 {i//batch_size + 1}/{(len(new_chunks)-1)//batch_size + 1} 처리 중...")
