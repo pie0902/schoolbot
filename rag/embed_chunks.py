@@ -2,112 +2,113 @@ import json
 import os
 from chromadb import PersistentClient
 from chromadb import Documents, EmbeddingFunction, Embeddings
-from google import genai
+import google.generativeai as genai
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ✅ API 키 직접 설정
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-CHUNKS_PATH = "rag/chunks.jsonl"
+# ✅ 설정
 CHROMA_DIR = "rag/chroma_db"
 COLLECTION_NAME = "knou_chunks"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# ✅ 커스텀 Gemini 임베딩 함수 클래스 (공식 문서 방식)
+# API 키 전역 설정
+genai.configure(api_key=GEMINI_API_KEY)
+
+# ✅ Gemini 임베딩 함수 (최신 API 방식)
 class GeminiEmbeddingFunction(EmbeddingFunction):
-    def __init__(self, api_key: str):
-        self.client = genai.Client(api_key=api_key)
-        self.model = "text-embedding-004"  # 공식 문서에서 사용하는 모델명
+    def __init__(self):
+        self.model = "models/text-embedding-004"
     
     def __call__(self, input: Documents) -> Embeddings:
-        embeddings = []
-        
-        # 배치로 처리 (효율성을 위해)
         try:
-            result = self.client.models.embed_content(
-                model=self.model,
-                contents=input  # 리스트 그대로 전달
-            )
-            
-            # 각 임베딩의 values 추출
-            for embedding in result.embeddings:
-                embeddings.append(embedding.values)
-                
+            # 배치 임베딩 요청
+            embeddings = []
+            for text in input:
+                result = genai.embed_content(
+                    model=self.model,
+                    content=text
+                )
+                embeddings.append(result['embedding'])
+            return embeddings
         except Exception as e:
-            print(f"❌ 임베딩 생성 중 오류: {e}")
-            # 개별 처리로 폴백
-            for doc in input:
-                try:
-                    result = self.client.models.embed_content(
-                        model=self.model,
-                        contents=[doc]
-                    )
-                    embeddings.append(result.embeddings[0].values)
-                except Exception as doc_error:
-                    print(f"❌ 개별 문서 임베딩 실패: {doc_error}")
-                    # 빈 벡터로 대체 (768차원 기본값)
-                    embeddings.append([0.0] * 768)
-        
-        return embeddings
+            print(f"❌ 임베딩 생성 실패: {e}")
+            # 빈 임베딩 반환 (ChromaDB 오류 방지)
+            return [[0.0] * 768 for _ in input]
 
-# ✅ Gemini 임베딩 함수 준비
-print("🔧 Gemini 임베딩 함수 초기화 중...")
-embedding_func = GeminiEmbeddingFunction(api_key=GEMINI_API_KEY)
+def load_chunks():
+    chunks = []
+    with open("rag/chunks.jsonl", "r", encoding="utf-8") as f:
+        for line in f:
+            chunks.append(json.loads(line.strip()))
+    return chunks
 
-# ✅ Chroma 클라이언트 초기화 (로컬 저장소 경로 설정)
-client = PersistentClient(path=CHROMA_DIR)
+def main():
+    print("🔧 Gemini 임베딩 함수 초기화 중...")
+    
+    # API 키 확인
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_api_key_here":
+        print("❌ GEMINI_API_KEY가 설정되지 않았습니다!")
+        exit(1)
+    
+    print("🔑 API 키 확인: ✅ 설정됨")
+    
+    # ✅ 이미 있는 ID 확인해서 중복 방지 (올바른 방식)
+    embedding_func = GeminiEmbeddingFunction()
+    client = PersistentClient(path=CHROMA_DIR)
+    
+    try:
+        collection = client.get_collection(
+            name=COLLECTION_NAME,
+            embedding_function=embedding_func
+        )
+        existing_ids = set(collection.get()["ids"])
+        print(f"📋 기존 청크 {len(existing_ids)}개 발견")
+    except Exception:
+        collection = client.create_collection(
+            name=COLLECTION_NAME,
+            embedding_function=embedding_func
+        )
+        existing_ids = set()
+        print("📝 새 컬렉션 생성")
 
-# ✅ 컬렉션 생성 or 불러오기
-collection = client.get_or_create_collection(
-    name=COLLECTION_NAME,
-    embedding_function=embedding_func
-)
+    # 청크 로드
+    print("📄 청크 로드 중...")
+    chunks = load_chunks()
+    print(f"📄 총 청크 {len(chunks)}개 로드됨")
 
-# ✅ chunks.jsonl 로드
-with open(CHUNKS_PATH, "r", encoding="utf-8") as f:
-    chunks = [json.loads(line) for line in f]
+    # 신규 청크 필터링
+    new_chunks = [chunk for chunk in chunks if chunk["id"] not in existing_ids]
+    print(f"🎯 신규 청크 {len(new_chunks)}개 임베딩 중...")
 
-print(f"📄 총 청크 {len(chunks)}개 로드됨")
+    if not new_chunks:
+        print("📭 추가할 신규 청크 없음.")
+        return
 
-# ✅ API 키 검증
-if not GEMINI_API_KEY or GEMINI_API_KEY == "your_api_key_here":
-    print("❌ GEMINI_API_KEY가 설정되지 않았습니다!")
-    exit(1)
-
-# 수정된 버전 - API 키 내용을 숨김
-print("API 키 확인: 설정됨")
-
-# ✅ 이미 있는 ID 확인해서 중복 방지 (올바른 방식)
-try:
-    existing_data = collection.get()
-    existing_ids = set(existing_data["ids"]) if existing_data["ids"] else set()
-    print(f"📋 기존 청크 {len(existing_ids)}개 발견")
-except Exception as e:
-    print(f"⚠️ 기존 데이터 확인 중 오류: {e}")
-    existing_ids = set()
-
-# ✅ 임베딩 및 저장
-new_chunks = [c for c in chunks if c["id"] not in existing_ids]
-print(f"🎯 신규 청크 {len(new_chunks)}개 임베딩 중...")
-
-if new_chunks:
-    # 배치 크기를 작게 해서 안정성 향상
+    # 배치로 임베딩 및 추가
     batch_size = 10
     for i in range(0, len(new_chunks), batch_size):
         batch = new_chunks[i:i+batch_size]
-        print(f"   📦 배치 {i//batch_size + 1}/{(len(new_chunks)-1)//batch_size + 1} 처리 중... ({len(batch)}개)")
         
-        try:
-            collection.add(
-                ids=[c["id"] for c in batch],
-                documents=[c["text"] for c in batch],
-                metadatas=[c.get("metadata", {"source": c["source"]}) for c in batch]
-            )
-        except Exception as e:
-            print(f"❌ 배치 처리 실패: {e}")
-            break
+        # 메타데이터와 문서 분리
+        documents = [chunk["content"] for chunk in batch]
+        metadatas = [{k: v for k, v in chunk.items() if k not in ["content", "id"]} for chunk in batch]
+        ids = [chunk["id"] for chunk in batch]
+        
+        print(f"🔄 배치 {i//batch_size + 1}/{(len(new_chunks)-1)//batch_size + 1} 처리 중...")
+        
+        # ChromaDB에 추가 (임베딩 자동 생성)
+        collection.add(
+            documents=documents,
+            metadatas=metadatas,
+            ids=ids
+        )
     
-    print(f"✅ 임베딩 완료. 총 {len(new_chunks)}개 저장됨.")
-else:
-    print("📭 추가할 신규 청크 없음.")
+    print("✅ 모든 청크 임베딩 완료!")
+    
+    # 최종 통계
+    final_count = len(collection.get()["ids"])
+    print(f"📊 최종 청크 수: {final_count}개")
+
+if __name__ == "__main__":
+    main()
