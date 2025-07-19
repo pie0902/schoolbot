@@ -10,6 +10,19 @@ from datetime import datetime
 BASE_URL = "https://cs.knou.ac.kr"
 PAGE_URL_TEMPLATE = "https://cs.knou.ac.kr/cs1/4812/subview.do?page={}&enc=Zm5jdDF8QEB8JTJGYmJzJTJGY3MxJTJGMjExOSUyRmFydGNsTGlzdC5kbyUzRg%3D%3D"
 
+# 날짜 형식 변환 함수 추가
+
+def convert_date_format(date_str):
+    try:
+        # 입력된 날짜 형식이 'YYYY.MM.DD'인 경우
+        date_obj = datetime.strptime(date_str, "%Y.%m.%d")
+        # 'YYYY-MM-DD' 형식으로 변환
+        return date_obj.strftime("%Y-%m-%d")
+    except ValueError:
+        # 변환 실패 시 원본 반환
+        return date_str
+
+
 def crawl_cs_notices(start_page=1, end_page=5):  # 페이지 수는 필요시 조절
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -58,7 +71,12 @@ if __name__ == "__main__":
     data_dir = "data"
     os.makedirs(data_dir, exist_ok=True)
     data = crawl_cs_notices()
-    data.sort(key=lambda x: datetime.strptime(x["date"], "%Y-%m-%d"), reverse=True)  # ✅ 여기 추가
+
+    # 데이터 정렬 전에 날짜 형식 변환
+    for item in data:
+        item["date"] = convert_date_format(item["date"])
+
+    data.sort(key=lambda x: datetime.strptime(x["date"], "%Y-%m-%d"), reverse=True)  # ✅ 여기 수정
 
     output_file = os.path.join(data_dir, "cs_notices_2025.csv")
     with open(output_file, "w", newline="", encoding="utf-8") as f:
