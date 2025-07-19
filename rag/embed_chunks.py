@@ -92,7 +92,20 @@ def main():
         
         # 메타데이터와 문서 분리
         documents = [chunk["text"] for chunk in batch]
-        metadatas = [{k: str(v) for k, v in chunk.items() if k not in ["text", "id"]} for chunk in batch]  # 각 값을 문자열로 변환
+
+        # metadata 값들을 안전하게 문자열로 변환
+        metadatas = []
+        for chunk in batch:
+            metadata = {}
+            for k, v in chunk.items():
+                if k not in ["text", "id"]:
+                    # 값이 dict나 list인 경우 JSON 문자열로 변환
+                    if isinstance(v, (dict, list)):
+                        metadata[k] = json.dumps(v, ensure_ascii=False)
+                    else:
+                        metadata[k] = str(v)
+            metadatas.append(metadata)
+
         ids = [chunk["id"] for chunk in batch]
         
         print(f"🔄 배치 {i//batch_size + 1}/{(len(new_chunks)-1)//batch_size + 1} 처리 중...")
