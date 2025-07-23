@@ -112,6 +112,13 @@ class KNOUChatbot:
         query_lower = query.lower()
         enhanced_keywords = set(query_lower.split())
         
+        # 🔥 NEW: 최신성 관련 키워드 확장
+        if any(word in query_lower for word in ['최신', '최근', '새로운', '가장', '신규', '업데이트', '공지', '최신공지', '최근공지', '새공지']):
+            enhanced_keywords.update([
+                '최신', '최근', '새로운', '신규', '업데이트', '공지',
+                '최신공지', '최근공지', '새공지'
+            ])
+        
         # 등록금 관련 키워드 확장
         if any(word in query_lower for word in ['등록', '학비', '납부', '등록금']):
             enhanced_keywords.update([
@@ -278,6 +285,9 @@ class KNOUChatbot:
     def search_documents(self, query: str, n_results: int = 5):
         """하이브리드 검색: LLM쿼리확장(Vector)과 키워드(Full-text) 검색을 RRF로 결합 + 날짜 기반 정렬"""
         
+        # 🔥 NEW: "최신" 쿼리인지 파악
+        is_latest_query = any(word in query.lower() for word in ['최신', '최근', '새로운', '가장'])
+        
         # 🚀 빠른 개선: 쿼리 전처리 및 키워드 확장
         enhanced_query = self.preprocess_query(query)
         
@@ -389,25 +399,36 @@ class KNOUChatbot:
                     'final_score': weighted_score
                 }
             
-            # 최종 가중 점수로 정렬 (높은 점수 순)
-            sorted_by_weighted_score = sorted(
-                top_ids,
-                key=lambda x: id_to_data[x]['final_score'],
-                reverse=True
-            )
+            # 🔥 NEW: '최신' 쿼리일 경우 날짜 우선 정렬, 아닐 경우 기존 점수 정렬
+            if is_latest_query:
+                print("✨ '최신' 쿼리로 감지, 날짜 우선 정렬 실행...")
+                # 날짜 문자열로 직접 정렬 (대부분의 YYYY-MM-DD 형식에서 동작)
+                # 동일 날짜의 경우 기존 점수로 2차 정렬
+                sorted_ids = sorted(
+                    top_ids,
+                    key=lambda x: (id_to_data.get(x, {}).get('date', '1900-01-01'), id_to_data.get(x, {}).get('final_score', 0)),
+                    reverse=True
+                )
+            else:
+                # 최종 가중 점수로 정렬 (높은 점수 순)
+                sorted_ids = sorted(
+                    top_ids,
+                    key=lambda x: id_to_data[x]['final_score'],
+                    reverse=True
+                )
             
             # 정렬된 순서로 결과 재구성
-            final_docs = [id_to_data[doc_id]['document'] for doc_id in sorted_by_weighted_score]
-            final_metas = [id_to_data[doc_id]['metadata'] for doc_id in sorted_by_weighted_score]
+            final_docs = [id_to_data[doc_id]['document'] for doc_id in sorted_ids]
+            final_metas = [id_to_data[doc_id]['metadata'] for doc_id in sorted_ids]
             
             # 점수 정보 출력 (디버깅용) - 모바일 최적화: 간략하게
             print(f"📊 기준일: {current_date}, 상위 문서 점수:")
-            for i, doc_id in enumerate(sorted_by_weighted_score[:2]):  # 상위 2개만
+            for i, doc_id in enumerate(sorted_ids[:2]):  # 상위 2개만
                 data = id_to_data[doc_id]
                 print(f"   {i+1}. 최종: {data['final_score']:.4f} [{data['date']}]")
             
             return {
-                'ids': [sorted_by_weighted_score],
+                'ids': [sorted_ids],
                 'documents': [final_docs],
                 'metadatas': [final_metas]
             }
