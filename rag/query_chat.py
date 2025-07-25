@@ -91,11 +91,29 @@ class KNOUChatbot:
             # "07.25" format
             if len(date_str.split('.')) == 2:
                 month, day = map(int, date_str.split('.'))
-                return date(context_year, month, day)
+                # 현재 날짜를 기준으로 연도 추정
+                current_date = date.today()
+                # 12월이면서 현재가 1-6월이면 작년, 아니면 올해
+                if month == 12 and current_date.month <= 6:
+                    year = current_date.year - 1
+                # 1-6월이면서 현재가 7-12월이면 내년, 아니면 올해  
+                elif month <= 6 and current_date.month >= 7:
+                    year = current_date.year + 1
+                else:
+                    year = current_date.year
+                return date(year, month, day)
             # "07/25" format
             elif len(date_str.split('/')) == 2:
                 month, day = map(int, date_str.split('/'))
-                return date(context_year, month, day)
+                # 동일한 로직 적용
+                current_date = date.today()
+                if month == 12 and current_date.month <= 6:
+                    year = current_date.year - 1
+                elif month <= 6 and current_date.month >= 7:
+                    year = current_date.year + 1
+                else:
+                    year = current_date.year
+                return date(year, month, day)
         except (ValueError, TypeError):
             pass
             
