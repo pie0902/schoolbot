@@ -4,6 +4,7 @@ from chromadb import Documents, EmbeddingFunction, Embeddings
 import google.generativeai as genai  
 import json
 from datetime import datetime, date
+import re
 import dotenv
 dotenv.load_dotenv()
 # ✅ 설정
@@ -56,6 +57,62 @@ class KNOUChatbot:
         self.gen_model = genai.GenerativeModel("gemini-1.5-flash")
         
         print("🎯 KNOU 챗봇 준비 완료!\n")
+
+    def _parse_date_string(self, date_str: str) -> date | None:
+        """Helper to parse various date string formats into a date object."""
+        if not date_str:
+            return None
+        
+        # 데이터의 주요 연도는 2025년이므로 기준으로 설정
+        context_year = 2025 
+
+        # Handle ranges, use start date
+        if "~" in date_str:
+            date_str = date_str.split("~")[0].strip()
+
+        # Try common formats
+        date_formats = [
+            "%Y-%m-%d",      # 2025-07-16
+            "%Y.%m.%d",      # 2025.07.16  
+            "%Y/%m/%d",      # 2025/07/16
+        ]
+        
+        dt_obj = None
+        for fmt in date_formats:
+            try:
+                dt_obj = datetime.strptime(date_str, fmt).date()
+                return dt_obj
+            except ValueError:
+                continue
+        
+        # Try partial formats (e.g., "07.25", "07/25")
+        try:
+            # "07.25" format
+            if len(date_str.split('.')) == 2:
+                month, day = map(int, date_str.split('.'))
+                return date(context_year, month, day)
+            # "07/25" format
+            elif len(date_str.split('/')) == 2:
+                month, day = map(int, date_str.split('/'))
+                return date(context_year, month, day)
+        except (ValueError, TypeError):
+            pass
+            
+        return None
+
+    def extract_query_date(self, query: str) -> date | None:
+        """Extracts a specific date (month and day) from the user query."""
+        # "7월 25일", "7월25일", "7 월 25 일" etc.
+        match = re.search(r'(\d{1,2})\s*월\s*(\d{1,2})\s*일', query)
+        if match:
+            month, day = int(match.group(1)), int(match.group(2))
+            # 데이터의 주요 연도는 2025년이므로 기준으로 설정
+            year = 2025 
+            try:
+                return date(year, month, day)
+            except ValueError: # Invalid date like Feb 30
+                return None
+        return None
 
     def get_data_date_info(self):
         """시스템 데이터의 날짜 범위 정보 가져오기"""
@@ -210,55 +267,17 @@ class KNOUChatbot:
     def calculate_date_weight(self, doc_date: str, current_date: str = None) -> float:
         """날짜 기반 가중치 계산 - 최신 문서일수록 높은 가중치"""
         if not current_date:
-            current_date = date.today().strftime("%Y-%m-%d")
+            curr_dt = date.today()
+        else:
+            try:
+                curr_dt = datetime.strptime(current_date, "%Y-%m-%d").date()
+            except ValueError:
+                curr_dt = date.today()
         
         try:
-            # 다양한 날짜 형식 처리
-            doc_dt = None
-            curr_dt = datetime.strptime(current_date, "%Y-%m-%d")
-            current_year = datetime.now().year
-            
-            # 날짜 범위나 특수 형식 처리 (예: "07.25 ~ 07.25")
-            if "~" in doc_date:
-                # 범위의 첫 번째 날짜만 사용
-                first_date = doc_date.split("~")[0].strip()
-                return self.calculate_date_weight(first_date, current_date)
-            
-            # 여러 날짜 형식 시도
-            date_formats = [
-                "%Y-%m-%d",      # 2025-07-16
-                "%Y.%m.%d",      # 2025.07.16  
-                "%Y/%m/%d",      # 2025/07/16
-            ]
-            
-            # 기본 형식들 시도
-            for fmt in date_formats:
-                try:
-                    doc_dt = datetime.strptime(doc_date, fmt)
-                    break
-                except ValueError:
-                    continue
-            
-            # 월.일 형식 처리 (현재 연도 추가)
-            if not doc_dt:
-                try:
-                    # "07.25" 형식
-                    if len(doc_date.split('.')) == 2:
-                        month, day = doc_date.split('.')
-                        if len(month) <= 2 and len(day) <= 2:
-                            full_date = f"{current_year}.{month.zfill(2)}.{day.zfill(2)}"
-                            doc_dt = datetime.strptime(full_date, "%Y.%m.%d")
-                    # "07/25" 형식
-                    elif len(doc_date.split('/')) == 2:
-                        month, day = doc_date.split('/')
-                        if len(month) <= 2 and len(day) <= 2:
-                            full_date = f"{current_year}/{month.zfill(2)}/{day.zfill(2)}"
-                            doc_dt = datetime.strptime(full_date, "%Y/%m/%d")
-                except ValueError:
-                    pass
+            doc_dt = self._parse_date_string(doc_date)
             
             if not doc_dt:
-                print(f"⚠️ 지원되지 않는 날짜 형식: {doc_date}")
                 return 0.3  # 기본 가중치
             
             # 날짜 차이 계산 (일 단위)
@@ -284,6 +303,44 @@ class KNOUChatbot:
 
     def search_documents(self, query: str, n_results: int = 5):
         """하이브리드 검색: LLM쿼리확장(Vector)과 키워드(Full-text) 검색을 RRF로 결합 + 날짜 기반 정렬"""
+
+        # 🔥 NEW: 특정 날짜 쿼리 우선 처리
+        query_date = self.extract_query_date(query)
+        if query_date:
+            print(f"🎯 특정 날짜 쿼리 감지: {query_date.strftime('%Y-%m-%d')}")
+            try:
+                all_docs_data = self.collection.get(include=["documents", "metadatas"])
+                
+                matched_docs = []
+                for i in range(len(all_docs_data['ids'])):
+                    meta = all_docs_data['metadatas'][i]
+                    doc_date_str = meta.get('date')
+                    if doc_date_str:
+                        parsed_doc_date = self._parse_date_string(doc_date_str)
+                        if parsed_doc_date and parsed_doc_date == query_date:
+                            matched_docs.append({
+                                'id': all_docs_data['ids'][i],
+                                'document': all_docs_data['documents'][i],
+                                'metadata': meta
+                            })
+                
+                if matched_docs:
+                    print(f"✨ 날짜가 정확히 일치하는 {len(matched_docs)}개의 문서를 찾았습니다. 우선적으로 반환합니다.")
+                    
+                    final_ids = [d['id'] for d in matched_docs]
+                    final_docs = [d['document'] for d in matched_docs]
+                    final_metas = [d['metadata'] for d in matched_docs]
+                    
+                    return {
+                        'ids': [final_ids],
+                        'documents': [final_docs],
+                        'metadatas': [final_metas]
+                    }
+                else:
+                    print(f"ℹ️ 날짜({query_date.strftime('%Y-%m-%d')})와 일치하는 문서는 없으나, 관련 내용을 계속 검색합니다.")
+
+            except Exception as e:
+                print(f"⚠️ 특정 날짜 검색 중 오류: {e}. 일반 검색으로 대체합니다.")
         
         # 🔥 NEW: "최신" 쿼리인지 파악
         is_latest_query = any(word in query.lower() for word in ['최신', '최근', '새로운', '가장'])
