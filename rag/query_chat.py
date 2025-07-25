@@ -5,6 +5,7 @@ import google.generativeai as genai
 import json
 from datetime import datetime, date
 import re
+from typing import Optional
 import dotenv
 dotenv.load_dotenv()
 # ✅ 설정
@@ -58,7 +59,7 @@ class KNOUChatbot:
         
         print("🎯 KNOU 챗봇 준비 완료!\n")
 
-    def _parse_date_string(self, date_str: str) -> date | None:
+    def _parse_date_string(self, date_str: str) -> Optional[date]:
         """Helper to parse various date string formats into a date object."""
         if not date_str:
             return None
@@ -100,7 +101,7 @@ class KNOUChatbot:
             
         return None
 
-    def extract_query_date(self, query: str) -> date | None:
+    def extract_query_date(self, query: str) -> Optional[date]:
         """Extracts a specific date (month and day) from the user query."""
         # "7월 25일", "7월25일", "7 월 25 일" etc.
         match = re.search(r'(\d{1,2})\s*월\s*(\d{1,2})\s*일', query)
