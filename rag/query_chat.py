@@ -3,7 +3,7 @@ from chromadb import PersistentClient
 from chromadb import Documents, EmbeddingFunction, Embeddings
 import google.generativeai as genai  
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import re
 from typing import Optional
 import dotenv
@@ -114,6 +114,61 @@ class KNOUChatbot:
             except ValueError: # Invalid date like Feb 30
                 return None
         return None
+
+    def is_latest_query(self, query: str) -> bool:
+        """사용자가 최신/최근 공지를 요청하는지 판단"""
+        latest_keywords = [
+            '최신', '최근', '새로운', '가장', '신규', '업데이트', 
+            '이번주', '이번달', '오늘', '어제', '최신공지', '최근공지', 
+            '새공지', '최신공고', '최근공고', '새공고', '최신소식'
+        ]
+        query_lower = query.lower()
+        return any(keyword in query_lower for keyword in latest_keywords)
+    
+    def get_recent_documents(self, days_back: int = 7) -> list:
+        """최근 N일 이내의 문서들을 날짜순으로 가져오기"""
+        try:
+            today = date.today()
+            cutoff_date = today - timedelta(days=days_back)
+            
+            all_docs_data = self.collection.get(include=["documents", "metadatas"])
+            recent_docs = []
+            
+            for i in range(len(all_docs_data['ids'])):
+                meta = all_docs_data['metadatas'][i]
+                doc_date_str = meta.get('date')
+                
+                if doc_date_str:
+                    parsed_doc_date = self._parse_date_string(doc_date_str)
+                    if parsed_doc_date and parsed_doc_date >= cutoff_date:
+                        recent_docs.append({
+                            'id': all_docs_data['ids'][i],
+                            'document': all_docs_data['documents'][i],
+                            'metadata': meta,
+                            'parsed_date': parsed_doc_date
+                        })
+            
+            # 날짜순으로 정렬 (최신순)
+            recent_docs.sort(key=lambda x: x['parsed_date'], reverse=True)
+            
+            print(f"📅 최근 {days_back}일 이내 문서: {len(recent_docs)}개 발견")
+            
+            if recent_docs:
+                final_ids = [d['id'] for d in recent_docs[:10]]  # 상위 10개만
+                final_docs = [d['document'] for d in recent_docs[:10]]
+                final_metas = [d['metadata'] for d in recent_docs[:10]]
+                
+                return {
+                    'ids': [final_ids],
+                    'documents': [final_docs],
+                    'metadatas': [final_metas]
+                }
+            
+            return None
+            
+        except Exception as e:
+            print(f"⚠️ 최근 문서 검색 중 오류: {e}")
+            return None
 
     def get_data_date_info(self):
         """시스템 데이터의 날짜 범위 정보 가져오기"""
@@ -304,6 +359,15 @@ class KNOUChatbot:
 
     def search_documents(self, query: str, n_results: int = 5):
         """하이브리드 검색: LLM쿼리확장(Vector)과 키워드(Full-text) 검색을 RRF로 결합 + 날짜 기반 정렬"""
+
+        # 🔥 NEW: 최신 공지 요청 우선 처리
+        if self.is_latest_query(query):
+            print("✨ '최신 공지' 쿼리로 감지, 최근 1주일 문서 우선 검색...")
+            recent_results = self.get_recent_documents(days_back=7)
+            if recent_results:
+                return recent_results
+            else:
+                print("ℹ️ 최근 1주일 내 문서가 없어 일반 검색으로 대체합니다.")
 
         # 🔥 NEW: 특정 날짜 쿼리 우선 처리
         query_date = self.extract_query_date(query)
@@ -518,13 +582,18 @@ class KNOUChatbot:
         
         context = "\n\n---\n\n".join(context_parts)
         
+        today_str = date.today().strftime("%Y년 %m월 %d일")
+        
         prompt = f"""당신은 한국방송통신대학교(KNOU)의 정보를 가장 가독성 좋게 요약하는 AI 전문가입니다. **반드시 마크다운(Markdown)을 사용**하여, 핵심을 먼저 보여주고 세부 정보를 명확하게 구분하여 사용자가 쉽게 이해하도록 답변을 구성해주세요.
+
+**중요: 오늘은 {today_str}입니다. 이 날짜를 기준으로 최신성과 관련성을 판단해주세요.**
 
 **답변 생성 규칙 (Markdown 사용):**
 
 1.  **🎯 핵심 요약 (맨 처음에):**
     *   사용자 질문에 대한 가장 중요한 답변을 **굵은 글씨**와 함께 1~2문장으로 요약하여 가장 먼저 보여주세요.
     *   관련 공지 날짜를 반드시 언급해주세요. (예: "**2025년 7월 16일 공지에 따르면, 2학기 성적우수장학생 선발이 확정되었습니다.**")
+    *   최신 공지를 요청받은 경우, 오늘 날짜 기준으로 가장 최근 공지들을 날짜순으로 나열해주세요.
 
 2.  **🔖 주요 정보 (섹션으로 구분):**
     *   `###` (h3)와 이모지를 사용하여 주요 정보 섹션을 나누세요. (예: `### 📌 선발 확인 방법`)
