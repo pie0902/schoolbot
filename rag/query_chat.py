@@ -91,29 +91,43 @@ class KNOUChatbot:
             # "07.25" format
             if len(date_str.split('.')) == 2:
                 month, day = map(int, date_str.split('.'))
-                # 현재 날짜를 기준으로 연도 추정
                 current_date = date.today()
-                # 12월이면서 현재가 1-6월이면 작년, 아니면 올해
-                if month == 12 and current_date.month <= 6:
-                    year = current_date.year - 1
-                # 1-6월이면서 현재가 7-12월이면 내년, 아니면 올해  
-                elif month <= 6 and current_date.month >= 7:
-                    year = current_date.year + 1
-                else:
-                    year = current_date.year
-                return date(year, month, day)
+                current_year = current_date.year
+                
+                # 먼저 현재 연도로 시도
+                try:
+                    candidate_date = date(current_year, month, day)
+                    # 현재 날짜와의 차이가 6개월 이내면 현재 연도 사용
+                    days_diff = abs((current_date - candidate_date).days)
+                    if days_diff <= 180:  # 6개월
+                        return candidate_date
+                    # 미래 날짜가 너무 멀면 작년
+                    elif candidate_date > current_date:
+                        return date(current_year - 1, month, day)
+                    # 과거 날짜가 너무 멀면 내년
+                    else:
+                        return date(current_year + 1, month, day)
+                except ValueError:
+                    return date(current_year, month, day)
+                    
             # "07/25" format
             elif len(date_str.split('/')) == 2:
                 month, day = map(int, date_str.split('/'))
-                # 동일한 로직 적용
                 current_date = date.today()
-                if month == 12 and current_date.month <= 6:
-                    year = current_date.year - 1
-                elif month <= 6 and current_date.month >= 7:
-                    year = current_date.year + 1
-                else:
-                    year = current_date.year
-                return date(year, month, day)
+                current_year = current_date.year
+                
+                # 동일한 로직 적용
+                try:
+                    candidate_date = date(current_year, month, day)
+                    days_diff = abs((current_date - candidate_date).days)
+                    if days_diff <= 180:  # 6개월
+                        return candidate_date
+                    elif candidate_date > current_date:
+                        return date(current_year - 1, month, day)
+                    else:
+                        return date(current_year + 1, month, day)
+                except ValueError:
+                    return date(current_year, month, day)
         except (ValueError, TypeError):
             pass
             
@@ -155,6 +169,11 @@ class KNOUChatbot:
             for i in range(len(all_docs_data['ids'])):
                 meta = all_docs_data['metadatas'][i]
                 doc_date_str = meta.get('date')
+                doc_type = meta.get('type')
+                
+                # notice 타입만 필터링 (schedule 제외)
+                if doc_type != 'notice':
+                    continue
                 
                 if doc_date_str:
                     parsed_doc_date = self._parse_date_string(doc_date_str)
@@ -169,7 +188,7 @@ class KNOUChatbot:
             # 날짜순으로 정렬 (최신순)
             recent_docs.sort(key=lambda x: x['parsed_date'], reverse=True)
             
-            print(f"📅 최근 {days_back}일 이내 문서: {len(recent_docs)}개 발견")
+            print(f"📅 최근 {days_back}일 이내 공지: {len(recent_docs)}개 발견")
             
             if recent_docs:
                 final_ids = [d['id'] for d in recent_docs[:10]]  # 상위 10개만
